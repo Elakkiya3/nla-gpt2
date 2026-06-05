@@ -1,0 +1,7 @@
+{
+  "original_mse": 9.7096,
+  "paraphrase_mse": 9.6803,
+  "ratio": 0.997,
+  "interpretation": "Low steganography \u2014 AR responds to semantic content not surface form",
+  "n_samples": 50
+}

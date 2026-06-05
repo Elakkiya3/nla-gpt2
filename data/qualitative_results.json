@@ -1,0 +1,38 @@
+[
+  {
+    "context": "The capital of France is Paris. The Eiffel Tower was built in",
+    "explanation": "several of Zagreb's major cities have been redeveloped into parks. The old downtown \u2014 Ljublana",
+    "mse": 6.3497,
+    "note": "AV generates encyclopedic prose \u2014 correct register, wrong topic. Thematic confabulation."
+  },
+  {
+    "context": "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) +",
+    "explanation": "70. The Usonian Center for Astrophysics established a division on Earth",
+    "mse": 9.3661,
+    "note": "Code context not distinguished from prose \u2014 AR MLP lacks capacity for this."
+  },
+  {
+    "context": "The mitochondria is the powerhouse of the cell. It produces ATP through",
+    "explanation": "in the city, where Henry VIII established a fleet of six ships",
+    "mse": 9.0111,
+    "note": "Scientific context produces historical prose \u2014 register mismatch."
+  },
+  {
+    "context": "In 1969, Neil Armstrong became the first human to walk on the",
+    "explanation": "oughborough Road of the University of Cambridge in Oxford, to N\u00fcrnberg near Frankfurt",
+    "mse": 8.052,
+    "note": "Historical context \u2014 AV generates plausible Wikipedia-style text, wrong facts."
+  },
+  {
+    "context": "Water boils at 100 degrees Celsius at sea level. This process",
+    "explanation": "shows the character Rashiya in a post mortem position",
+    "mse": 10.3991,
+    "note": "Physics context generates narrative content \u2014 furthest from expected."
+  },
+  {
+    "context": "Shakespeare wrote Romeo and Juliet around 1595. The play tells",
+    "explanation": "R.C. Scott created a new way to convey his view of art",
+    "mse": 9.5659,
+    "note": "Literary context generates art criticism \u2014 thematically adjacent but wrong."
+  }
+]
