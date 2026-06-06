@@ -1,182 +1,365 @@
 # Natural Language Autoencoder on GPT-2
 
-## What I implemented and why
+## Overview
 
-I reimplemented the Natural Language Autoencoder (NLA) from
-Fraser-Taliente et al. (2026) on GPT-2 (124M parameters). An NLA
-consists of two jointly trained components:
+This project reimplements the core methodology from Anthropic's paper *Natural Language Autoencoders Produce Unsupervised Explanations of LLM Activations* (Fraser-Taliente et al., 2026) on a small open-source language model.
 
-- **Activation Verbalizer (AV)**: reads a residual stream activation
-  h_l and generates a natural language explanation z
-- **Activation Reconstructor (AR)**: reads z and reconstructs h_l
+The goal of a Natural Language Autoencoder (NLA) is to compress an internal activation into natural language and then reconstruct the original activation from that text.
 
-They are trained so the natural language bottleneck improves over time.
-The primary metric is Fraction of Variance Explained:
+The architecture consists of two components:
+
+* **Activation Verbalizer (AV)**: converts a model activation into a natural language explanation.
+* **Activation Reconstructor (AR)**: reconstructs the original activation from the generated explanation.
+
+The central question is whether a natural language bottleneck can preserve meaningful information contained in model activations.
+
+The primary evaluation metric is **Fraction of Variance Explained (FVE)**:
+
 FVE = 1 − E[‖h − AR(AV(h))‖²] / E[‖h − h̄‖²]
 
-FVE = 0 means predicting the mean activation. FVE = 1 is perfect
-reconstruction. The paper reports 0.6–0.8 FVE on Claude models.
+where:
 
-I chose GPT-2 (124M) as the target model because it fits on a single
-free Kaggle T4 GPU (15.6GB), has a clean 12-layer transformer
-architecture, and is a well-studied baseline. Target layer: 8/12
-(67% depth), matching the paper's middle-to-late layer specification.
+* h is the original activation
+* h̄ is the mean activation
+* AR(AV(h)) is the reconstructed activation
 
-## Architecture decisions
+FVE = 0 corresponds to predicting the mean activation.
 
-### AV — GPT-2 on GPU
-Copy of GPT-2 with a learned linear projection (R^768 → R^768) that
-maps the target activation into embedding space. Activation injected
-after a fixed prompt with scaling factor α=10 (paper's 75th-percentile
-norm heuristic). Autoregressively generates explanation z.
+FVE = 1 corresponds to perfect reconstruction.
 
-### AR — 5-layer MLP on CPU
-The paper uses a full language model as AR. I attempted this but two
-GPT-2 models together require ~30GB VRAM — twice the T4's 15.6GB
-capacity. I therefore used a stronger MLP:
-EmbeddingBag(50257, 128) → Linear(128→1024) → 4 residual blocks
-with LayerNorm and GELU → Linear(1024→768).
+Anthropic reports approximately 0.6–0.8 FVE on Claude-scale models.
 
-This is the primary architectural difference from the paper and the
-main reason our FVE is lower. With a full LM as AR, I would expect
-significantly better reconstruction.
+---
 
-### Why not quantize both models?
-I experimented with 4-bit quantization but found that quantizing the
-AV degraded generation quality severely — the injected activation
-could not propagate meaningfully through quantized attention layers.
-The MLP AR was the most practical solution.
+# Why This Approach Matters
 
-## Training procedure
+Many interpretability techniques recover latent features that remain difficult for humans to understand directly.
 
-I discovered through experimentation that joint training from scratch
-consistently diverges. The AR must first learn the activation space
-before joint optimization is stable. I developed a three-phase approach:
+Natural Language Autoencoders replace the latent bottleneck with natural language explanations. If activations can be reconstructed accurately after passing through text, then the generated explanations may provide insight into what information the model internally represents.
 
-**Phase A — AR standalone** (300 steps, lr=1e-3):
-Train AR alone on random (summary, activation) pairs to get output
-norms into the correct range (~110, matching mean activation norm).
-Without this, AR outputs near-zero vectors and joint training never
-recovers.
+This makes NLAs an interesting bridge between mechanistic interpretability and human-readable explanations.
 
-**Phase B — AR matched pairs** (800 steps, cosine lr decay):
-Train AR on matched (proxy_summary, activation) pairs. FVE reached
-0.08–0.09 by end of Phase B — first stable positive FVE.
+---
 
-**Phase C — Joint SFT** (600 steps):
-AV and AR trained jointly. AV learns to generate summaries given
-activations. AR continues improving reconstruction.
+# Model Selection
 
-**RL — GRPO** (500 steps, G=3):
-For each training activation, sample G=3 explanations from AV, score
-by reconstruction MSE under AR, normalize to advantages, update AV
-toward better-scoring explanations. AR updated simultaneously.
+I chose **GPT-2 (124M parameters)** because:
 
-Reward: r = −log‖h_l − AR(AV(h_l))‖²
+* It fits comfortably on a free Kaggle Tesla T4 GPU.
+* Its architecture is well understood.
+* It allows multiple experiments within a limited compute budget.
+* It provides a realistic small-scale testbed for reproducing the paper's methodology.
 
-## Results
+Configuration:
 
-![FVE curve](figures/fve_curve.png)
+| Setting      | Value        |
+| ------------ | ------------ |
+| Model        | GPT-2 (124M) |
+| Layers       | 12           |
+| Target Layer | 8            |
+| Dataset      | WikiText-103 |
+| GPU          | Tesla T4     |
+| VRAM         | 15.6 GB      |
 
-| Stage | FVE |
-|---|---|
-| Phase B peak | ~0.09 |
-| After Phase C SFT | ~0.04 |
-| RL best | 0.0455 |
-| Anthropic paper (Claude-scale) | 0.60–0.80 |
+Layer 8 was selected because the paper focuses on middle-to-late transformer layers.
 
-## Key finding — steganography check
+---
 
-I tested whether the AR relies on semantic content or surface token
-patterns by paraphrasing AV outputs and measuring reconstruction MSE.
+# Architecture
 
-| Condition | MSE |
-|---|---|
-| Original AV explanation | 9.71 |
-| Paraphrased explanation | 9.68 |
-| Ratio | 0.997 |
+## Activation Verbalizer (AV)
 
-A ratio of 0.997 means paraphrasing causes essentially no change in
-reconstruction quality. This is strong evidence the AR is responding
-to semantic meaning, not surface form — matching the paper's finding
-that "meaning-preserving transforms cause only small FVE drops."
+The Activation Verbalizer receives a residual-stream activation from GPT-2 and generates a natural language explanation.
 
-This is the most interesting result from our experiments. Despite low
-FVE, the pipeline has learned a genuine semantic bottleneck.
+Implementation:
 
-## Why FVE is lower than the paper
+* GPT-2 language model
+* Linear projection (768 → 768)
+* Activation injection into embedding space
+* Scaling factor α = 10
+* Autoregressive text generation
 
-Four reasons in order of importance:
+The verbalizer attempts to describe information encoded in the activation using natural language.
 
-**1. AR capacity** — dominant factor. Our MLP AR has ~12M parameters
-vs a full language model in the paper. Inverting a 768-dim continuous
-vector from short text is a hard regression problem that benefits
-enormously from model capacity.
+---
 
-**2. Model scale** — GPT-2 124M vs Claude-scale models. Larger models
-have richer, more verbalizable internal representations.
+## Activation Reconstructor (AR)
 
-**3. Training budget** — ~2000 total steps vs hundreds of thousands.
-The paper shows FVE grows log-linearly with training steps.
+The Activation Reconstructor receives the generated explanation and predicts the original activation.
 
-**4. Warm-start quality** — proxy summaries vs Claude-generated
-summaries that capture what the model is "thinking about."
+The paper uses a full language model as the reconstructor. Because two GPT-2 models exceed Kaggle T4 memory limits, I implemented a smaller reconstructor:
 
-## What I found genuinely surprising
+EmbeddingBag → Linear → Residual MLP Blocks → Linear
 
-**L2 normalization breaks FVE measurement at small scale.** The paper
-normalizes all activations to unit L2 norm. When I did this on GPT-2,
-all activations collapsed onto a sphere with baseline MSE ~0.001,
-making FVE numerically unstable (values of -2000 to -4000). Using
-unnormalized activations (mean norm ~110) gave a proper baseline MSE
-of ~9.7 and stable FVE measurement. This suggests the paper's
-normalization works because their models produce more diverse
-activations, or because their scale makes the normalization benign.
+Architecture:
 
-**Three-phase training is load-bearing.** Every attempt at joint
-training from scratch diverged. The AR must learn the activation space
-independently before the AV can learn to generate useful descriptions
-for it. This is not discussed explicitly in the paper but appears
-critical at small scale.
+* EmbeddingBag(50257, 128)
+* Linear(128 → 1024)
+* Four residual blocks
+* LayerNorm + GELU
+* Linear(1024 → 768)
 
-**The FVE oscillates during RL.** Rather than monotonically improving,
-FVE fluctuated between -0.1 and +0.05 during RL training. This is
-consistent with the paper's note that "FVE grows roughly linearly in
-log(training steps)" — with only 500 steps, we are far from the
-regime where this trend is visible.
+This is the largest architectural deviation from the original paper and likely a major reason for lower reconstruction performance.
 
-## What remains uncertain
+---
 
-- Whether the FVE gap is primarily from AR capacity or model scale.
-  Testing a GPT-2-scale AR on a machine with more VRAM would isolate
-  this. My prediction: AR capacity is dominant.
-- Whether more RL steps would close the gap log-linearly as the paper
-  suggests. Our GPU quota (30h/week) prevented longer runs.
-- Whether proxy summaries are sufficient or whether Claude-generated
-  summaries are necessary for positive FVE at small scale.
+# Training Procedure
 
-## Compute and reproducibility
+During experimentation I found that joint optimization from random initialization consistently failed.
 
-All experiments ran on Kaggle free tier T4 GPU (15.6GB VRAM).
-No API keys required. Total GPU time: ~4 hours.
-Full pipeline: [src/](src/) modules + [notebooks/nla_gpt2.ipynb](notebooks/nla_gpt2.ipynb)
+The reconstructor first needed to learn the activation space before meaningful verbalizer learning could occur.
 
-To reproduce:
-```bash
-git clone https://github.com/Elakkiya3/nla-gpt2
-# Open notebooks/nla_gpt2.ipynb on Kaggle with T4 GPU
-# Run all cells in order
+I therefore used a three-stage training procedure.
+
+## Phase A — Reconstructor Warmup
+
+300 steps
+
+The reconstructor was trained to match activation norms and avoid near-zero outputs.
+
+Without this stage, subsequent training repeatedly collapsed.
+
+## Phase B — Reconstructor Training
+
+800 steps
+
+The reconstructor was trained on matched activation-summary pairs.
+
+This phase produced the first stable positive FVE values.
+
+Peak FVE reached approximately 0.09.
+
+## Phase C — Joint Supervised Fine-Tuning
+
+600 steps
+
+The verbalizer and reconstructor were trained jointly.
+
+Surprisingly, reconstruction quality decreased during this stage.
+
+This suggests that at small scale the verbalizer may introduce noise faster than the reconstructor can adapt.
+
+## Reward-Weighted Fine-Tuning
+
+500 steps
+
+Inspired by the reinforcement-learning stage described in the paper.
+
+Procedure:
+
+1. Generate multiple candidate explanations.
+2. Reconstruct activations.
+3. Score explanations using reconstruction error.
+4. Prefer explanations with higher reward.
+
+Reward:
+
+r = −log ||h − h'||²
+
+This is a simplified reward-weighted optimization procedure rather than a full implementation of GRPO.
+
+---
+
+# Results
+
+## Quantitative Results
+
+| Stage                            | FVE       |
+| -------------------------------- | --------- |
+| Phase B Peak                     | ~0.09     |
+| Phase C End                      | 0.014     |
+| Reward-Weighted Fine-Tuning Best | 0.0455    |
+| Anthropic (Claude-scale)         | 0.60–0.80 |
+
+Final result:
+
+**FVE = 0.0455**
+
+Although substantially below the values reported by Anthropic, the system achieved positive reconstruction despite severe model-size and compute constraints.
+
+---
+
+# Qualitative Failure Modes
+
+The most obvious limitation appears in the generated explanations.
+
+Examples:
+
+| Input Context                              | Generated Explanation                    |
+| ------------------------------------------ | ---------------------------------------- |
+| "The capital of France is Paris..."        | "Several of Zagreb's major cities..."    |
+| "The mitochondria is the powerhouse..."    | "Henry VIII established a fleet..."      |
+| "Neil Armstrong became the first human..." | "University of Cambridge in Oxford..."   |
+| Python Fibonacci code                      | "The Usonian Center for Astrophysics..." |
+
+The generated text is usually grammatical and fluent but often fails to preserve the semantic content of the source activation.
+
+This suggests that the verbalizer learned the style of WikiText prose more strongly than the activation-conditioning signal.
+
+---
+
+# Steganography Check
+
+A concern raised in the paper is whether reconstruction relies on hidden token-level patterns rather than semantic meaning.
+
+To investigate this, I paraphrased generated explanations and measured reconstruction quality.
+
+| Condition               | MSE   |
+| ----------------------- | ----- |
+| Original Explanation    | 9.71  |
+| Paraphrased Explanation | 9.68  |
+| Ratio                   | 0.997 |
+
+The reconstruction error changed very little after paraphrasing.
+
+This suggests that reconstruction is relatively insensitive to superficial wording changes.
+
+However, because overall FVE remains low and generated explanations are often weakly aligned with source content, this result should be interpreted cautiously.
+
+---
+
+# Interesting Findings
+
+## Three-Phase Training Was Essential
+
+Every attempt at end-to-end training from random initialization failed.
+
+Pretraining the reconstructor first was necessary for stable optimization.
+
+This observation was one of the most important practical findings of the project.
+
+## Joint Training Reduced Performance
+
+Another surprising result was:
+
+* Phase B FVE ≈ 0.09
+* Phase C FVE ≈ 0.014
+
+Joint optimization reduced reconstruction quality rather than improving it.
+
+One possible explanation is that the verbalizer changed faster than the reconstructor could adapt.
+
+## L2 Normalization Produced Unstable FVE
+
+The paper normalizes activations before evaluation.
+
+When applied directly to GPT-2 activations, I observed:
+
+* Baseline MSE ≈ 0.001
+* Extremely unstable FVE values
+* FVE often below −2000
+
+Using unnormalized activations produced stable measurements:
+
+* Mean activation norm ≈ 110
+* Baseline MSE ≈ 9.7
+
+I did not investigate whether this effect persists for larger models.
+
+---
+
+# Why Results Differ From The Paper
+
+Several factors likely explain the gap between 0.0455 FVE and Anthropic's reported 0.6–0.8.
+
+### Reconstructor Capacity
+
+The paper uses a full language model as the reconstructor.
+
+This implementation uses a relatively small MLP.
+
+This is likely the largest contributor to the performance gap.
+
+### Model Scale
+
+GPT-2 (124M) is far smaller than Claude-scale systems.
+
+Larger models may contain more verbalizable internal representations.
+
+### Training Budget
+
+The paper trains for substantially longer.
+
+My experiments used roughly 2000 optimization steps.
+
+### Weak Supervision
+
+The paper benefits from stronger explanation-generation procedures.
+
+I relied on proxy summaries generated from the training corpus.
+
+---
+
+# Limitations and Open Questions
+
+Several questions remain open:
+
+* Is reconstructor capacity the dominant bottleneck?
+* Would a full language-model reconstructor significantly improve FVE?
+* Are proxy summaries sufficient for small-scale NLA training?
+* Does the paraphrasing result reflect semantic understanding or broader distributional similarity?
+
+These would be natural directions for future work.
+
+---
+
+# Reproducibility
+
+All experiments were run on:
+
+| Resource     | Value        |
+| ------------ | ------------ |
+| Platform     | Kaggle       |
+| GPU          | Tesla T4     |
+| VRAM         | 15.6 GB      |
+| Dataset      | WikiText-103 |
+| Model        | GPT-2 124M   |
+| Target Layer | 8            |
+| Runtime      | ~4 hours     |
+
+Repository structure:
+
+```text
+src/
+├── config.py
+├── data.py
+├── models.py
+├── train.py
+└── evaluate.py
+
+data/
+├── qualitative_results.json
+
+figures/
+├── fve_curve.png
+
+README.md
+requirements.txt
 ```
 
-## Code structure
-src/config.py     — all hyperparameters in one place
-src/models.py     — AV and AR class definitions
-src/data.py       — activation extraction and summary generation
-src/train.py      — SFT phases A/B/C and RL training loop
-src/evaluate.py   — FVE computation, qualitative eval, steganography check
+To reproduce:
 
-## References
+```bash
+git clone https://github.com/Elakkiya3/nla-gpt2
+cd nla-gpt2
 
-Fraser-Taliente, Kantamneni, Ong et al. (2026). Natural Language
-Autoencoders Produce Unsupervised Explanations of LLM Activations.
+pip install -r requirements.txt
+
+# Run the Kaggle notebook or execute the pipeline
+# using the source files in src/
+```
+
+Final reported metrics:
+
+* FVE = 0.0455
+* Steganography ratio = 0.997
+
+---
+
+# Reference
+
+Fraser-Taliente, Kantamneni, Ong et al. (2026).
+
+Natural Language Autoencoders Produce Unsupervised Explanations of LLM Activations.
+
 https://transformer-circuits.pub/2026/nla/index.html
