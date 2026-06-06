@@ -1,325 +1,282 @@
-# Natural Language Autoencoder on GPT-2
+Natural Language Autoencoder on GPT-2
+Overview
 
-## Overview
+This project reimplements the core ideas from Anthropic's 2026 paper:
 
-This project reimplements the core methodology from Anthropic's paper *Natural Language Autoencoders Produce Unsupervised Explanations of LLM Activations* (Fraser-Taliente et al., 2026) on a small open-source language model.
+Natural Language Autoencoders Produce Unsupervised Explanations of LLM Activations
 
-The goal of a Natural Language Autoencoder (NLA) is to compress an internal activation into natural language and then reconstruct the original activation from that text.
+The goal is to investigate whether internal neural activations can be compressed into natural language explanations and then reconstructed back into activation space.
 
-The architecture consists of two components:
+The original paper demonstrates this approach on Claude models, reporting Fraction of Variance Explained (FVE) values between 0.6 and 0.8. My objective was not to reproduce those exact numbers, but to reproduce the methodology on a much smaller open-source model under realistic compute constraints and analyze what works, what fails, and why.
 
-* **Activation Verbalizer (AV)**: converts a model activation into a natural language explanation.
-* **Activation Reconstructor (AR)**: reconstructs the original activation from the generated explanation.
+Why This Approach Matters
 
-The central question is whether a natural language bottleneck can preserve meaningful information contained in model activations.
+Mechanistic interpretability often relies on analyzing neurons, features, or circuits directly.
 
-The primary evaluation metric is **Fraction of Variance Explained (FVE)**:
+Natural Language Autoencoders (NLAs) propose a different approach:
 
-FVE = 1 − E[‖h − AR(AV(h))‖²] / E[‖h − h̄‖²]
+Convert an activation into a natural language explanation.
+Reconstruct the activation from that explanation.
+Measure how much information survives the natural-language bottleneck.
 
-where:
+If reconstruction quality remains high, then natural language explanations contain meaningful information about the model's internal state.
 
-* h is the original activation
-* h̄ is the mean activation
-* AR(AV(h)) is the reconstructed activation
+This provides a scalable way to study representations without manually labeling features.
 
-FVE = 0 corresponds to predicting the mean activation.
+Model Selection
 
-FVE = 1 corresponds to perfect reconstruction.
+I chose GPT-2 (124M parameters) as the target model.
 
-Anthropic reports approximately 0.6–0.8 FVE on Claude-scale models.
+Reasons:
 
----
+Runs comfortably on a free Kaggle T4 GPU.
+Widely studied and easy to instrument.
+Small enough for rapid experimentation.
+Provides a realistic setting for testing whether the NLA methodology scales down.
 
-# Why This Approach Matters
+Target activation layer:
 
-Many interpretability techniques recover latent features that remain difficult for humans to understand directly.
+Layer 8 of 12
+Approximately 67% depth through the network
 
-Natural Language Autoencoders replace the latent bottleneck with natural language explanations. If activations can be reconstructed accurately after passing through text, then the generated explanations may provide insight into what information the model internally represents.
+This roughly matches the middle-to-late layer region studied in the paper.
 
-This makes NLAs an interesting bridge between mechanistic interpretability and human-readable explanations.
+Reimplementation
 
----
+The Natural Language Autoencoder consists of two components.
 
-# Model Selection
+Activation Verbalizer (AV)
 
-I chose **GPT-2 (124M parameters)** because:
+Input: residual stream activation vector
 
-* It fits comfortably on a free Kaggle Tesla T4 GPU.
-* Its architecture is well understood.
-* It allows multiple experiments within a limited compute budget.
-* It provides a realistic small-scale testbed for reproducing the paper's methodology.
-
-Configuration:
-
-| Setting      | Value        |
-| ------------ | ------------ |
-| Model        | GPT-2 (124M) |
-| Layers       | 12           |
-| Target Layer | 8            |
-| Dataset      | WikiText-103 |
-| GPU          | Tesla T4     |
-| VRAM         | 15.6 GB      |
-
-Layer 8 was selected because the paper focuses on middle-to-late transformer layers.
-
----
-
-# Architecture
-
-## Activation Verbalizer (AV)
-
-The Activation Verbalizer receives a residual-stream activation from GPT-2 and generates a natural language explanation.
+Output: natural language explanation
 
 Implementation:
 
-* GPT-2 language model
-* Linear projection (768 → 768)
-* Activation injection into embedding space
-* Scaling factor α = 10
-* Autoregressive text generation
+GPT-2 language model
+Learned linear projection: R⁷⁶⁸ → R⁷⁶⁸
+Activation injected into embedding space
+Autoregressive generation
 
-The verbalizer attempts to describe information encoded in the activation using natural language.
+The AV attempts to translate activations into text.
 
----
+Activation Reconstructor (AR)
 
-## Activation Reconstructor (AR)
+Input: generated explanation
 
-The Activation Reconstructor receives the generated explanation and predicts the original activation.
+Output: reconstructed activation
 
-The paper uses a full language model as the reconstructor. Because two GPT-2 models exceed Kaggle T4 memory limits, I implemented a smaller reconstructor:
+The paper uses a language model as the reconstructor.
 
-EmbeddingBag → Linear → Residual MLP Blocks → Linear
+Running two GPT-2 models simultaneously exceeded available GPU memory, so I replaced the reconstructor with a smaller network:
 
-Architecture:
+EmbeddingBag
+→ Linear(128 → 1024)
+→ 4 Residual Blocks
+→ LayerNorm
+→ GELU
+→ Linear(1024 → 768)
 
-* EmbeddingBag(50257, 128)
-* Linear(128 → 1024)
-* Four residual blocks
-* LayerNorm + GELU
-* Linear(1024 → 768)
+This is the main architectural deviation from the paper.
 
-This is the largest architectural deviation from the original paper and likely a major reason for lower reconstruction performance.
+I expect this simplification to be the dominant reason for lower reconstruction quality compared with the Claude-scale results.
 
----
+Dataset
 
-# Training Procedure
+Source:
 
-During experimentation I found that joint optimization from random initialization consistently failed.
+WikiText-103
 
-The reconstructor first needed to learn the activation space before meaningful verbalizer learning could occur.
+Processing:
 
-I therefore used a three-stage training procedure.
+60,000 text samples
+GPT-2 activations extracted from layer 8
+5,000 proxy summaries generated for initialization
 
-## Phase A — Reconstructor Warmup
+The activations serve as training targets for the autoencoder.
+
+Training Procedure
+
+Direct end-to-end training proved unstable.
+
+Joint training from random initialization consistently failed, so I adopted a staged training procedure.
+
+Phase A — Reconstructor Warmup
 
 300 steps
 
-The reconstructor was trained to match activation norms and avoid near-zero outputs.
+Objective:
 
-Without this stage, subsequent training repeatedly collapsed.
+Train AR alone so reconstructed vectors have realistic magnitude.
 
-## Phase B — Reconstructor Training
+Observation:
+
+Without this phase, AR outputs remained close to zero and subsequent training collapsed.
+
+Phase B — Matched Pair Training
 
 800 steps
 
-The reconstructor was trained on matched activation-summary pairs.
+Objective:
 
-This phase produced the first stable positive FVE values.
+Train AR on activation-summary pairs.
 
-Peak FVE reached approximately 0.09.
+Result:
 
-## Phase C — Joint Supervised Fine-Tuning
+First stable positive FVE values appeared during this phase.
+
+Peak FVE:
+
+≈ 0.09
+Phase C — Joint Supervised Fine-Tuning
 
 600 steps
 
-The verbalizer and reconstructor were trained jointly.
+Objective:
 
-Surprisingly, reconstruction quality decreased during this stage.
+Train AV and AR jointly.
 
-This suggests that at small scale the verbalizer may introduce noise faster than the reconstructor can adapt.
+Result:
 
-## Reward-Weighted Fine-Tuning
+The verbalizer learned to generate fluent explanations, but reconstruction quality decreased relative to the best Phase B checkpoint.
+
+Reward-Weighted Optimization
 
 500 steps
 
-Inspired by the reinforcement-learning stage described in the paper.
+Inspired by GRPO-style optimization.
 
 Procedure:
 
-1. Generate multiple candidate explanations.
-2. Reconstruct activations.
-3. Score explanations using reconstruction error.
-4. Prefer explanations with higher reward.
+Generate multiple candidate explanations.
+Score each candidate using reconstruction error.
+Compute relative advantages.
+Update the verbalizer toward higher-reward explanations.
 
 Reward:
 
-r = −log ||h − h'||²
+r = −log(||h − AR(AV(h))||²)
 
-This is a simplified reward-weighted optimization procedure rather than a full implementation of GRPO.
+This is not a full implementation of GRPO, but follows the same intuition of optimizing explanations according to reconstruction quality.
 
----
+Results
+Fraction of Variance Explained (FVE)
+Stage	FVE
+Phase B peak	~0.09
+Phase C	0.014
+Best reward-weighted run	0.0455
+Anthropic paper	0.60–0.80
 
-# Results
+The final system achieved:
 
-## Quantitative Results
+FVE = 0.0455
 
-| Stage                            | FVE       |
-| -------------------------------- | --------- |
-| Phase B Peak                     | ~0.09     |
-| Phase C End                      | 0.014     |
-| Reward-Weighted Fine-Tuning Best | 0.0455    |
-| Anthropic (Claude-scale)         | 0.60–0.80 |
+This is substantially below the paper's results but demonstrates a functioning natural-language bottleneck on a small model.
 
-Final result:
+Training Curve
 
-**FVE = 0.0455**
+![alt text](fve_curve.png)
 
-Although substantially below the values reported by Anthropic, the system achieved positive reconstruction despite severe model-size and compute constraints.
+The curve shows:
 
----
+Early reconstruction learning
+Instability during joint training
+Partial recovery during reward-weighted optimization
+Qualitative Analysis
 
-# Qualitative Failure Modes
+Generated explanations were usually grammatical and coherent.
 
-The most obvious limitation appears in the generated explanations.
+However, they frequently failed to reflect the source content.
 
 Examples:
 
-| Input Context                              | Generated Explanation                    |
-| ------------------------------------------ | ---------------------------------------- |
-| "The capital of France is Paris..."        | "Several of Zagreb's major cities..."    |
-| "The mitochondria is the powerhouse..."    | "Henry VIII established a fleet..."      |
-| "Neil Armstrong became the first human..." | "University of Cambridge in Oxford..."   |
-| Python Fibonacci code                      | "The Usonian Center for Astrophysics..." |
+Input Topic	Generated Explanation
+France and Paris	Description of cities in Croatia
+Mitochondria	Historical discussion of ships
+Neil Armstrong	Discussion of universities
+Fibonacci code	Discussion of astrophysics
 
-The generated text is usually grammatical and fluent but often fails to preserve the semantic content of the source activation.
+These outputs suggest that GPT-2's language prior dominates the activation-conditioning signal.
 
-This suggests that the verbalizer learned the style of WikiText prose more strongly than the activation-conditioning signal.
+The model learns to generate plausible WikiText-style prose but not reliably activation-specific explanations.
 
----
+Steganography Experiment
 
-# Steganography Check
+The paper investigates whether reconstruction relies on semantic meaning or hidden token-level encoding.
 
-A concern raised in the paper is whether reconstruction relies on hidden token-level patterns rather than semantic meaning.
+I performed a simplified version of this test.
 
-To investigate this, I paraphrased generated explanations and measured reconstruction quality.
+Method:
 
-| Condition               | MSE   |
-| ----------------------- | ----- |
-| Original Explanation    | 9.71  |
-| Paraphrased Explanation | 9.68  |
-| Ratio                   | 0.997 |
+Generate explanation.
+Paraphrase explanation.
+Reconstruct activations.
+Compare reconstruction error.
 
-The reconstruction error changed very little after paraphrasing.
+Results:
 
-This suggests that reconstruction is relatively insensitive to superficial wording changes.
+Condition	MSE
+Original explanation	9.71
+Paraphrased explanation	9.68
+Ratio	0.997
 
-However, because overall FVE remains low and generated explanations are often weakly aligned with source content, this result should be interpreted cautiously.
+A ratio near 1.0 suggests that reconstruction quality is largely preserved under paraphrasing.
 
----
+This indicates that reconstruction is not relying exclusively on exact token sequences.
 
-# Interesting Findings
+However, because overall FVE remains low, this result should be interpreted cautiously.
 
-## Three-Phase Training Was Essential
+Most Interesting Findings
+1. Reconstructor pretraining was essential
 
-Every attempt at end-to-end training from random initialization failed.
+Every attempt at fully joint training failed.
 
-Pretraining the reconstructor first was necessary for stable optimization.
+The reconstructor needed to learn the activation space before the verbalizer could learn useful explanations.
 
-This observation was one of the most important practical findings of the project.
+This emerged from experimentation rather than from the paper.
 
-## Joint Training Reduced Performance
+2. Activation normalization produced unstable FVE estimates
 
-Another surprising result was:
+The paper normalizes activations before injection into the verbalizer.
 
-* Phase B FVE ≈ 0.09
-* Phase C FVE ≈ 0.014
+In my GPT-2 experiments, unit-normalized activations produced extremely small total variance, which made FVE highly unstable and often strongly negative.
 
-Joint optimization reduced reconstruction quality rather than improving it.
+Using raw activations yielded stable measurements:
 
-One possible explanation is that the verbalizer changed faster than the reconstructor could adapt.
+Baseline MSE ≈ 9.7
+Mean activation norm ≈ 110
 
-## L2 Normalization Produced Unstable FVE
+Whether this behavior is specific to GPT-2 or generalizes to larger models remains unclear.
 
-The paper normalizes activations before evaluation.
+3. Fluent text does not imply meaningful explanations
 
-When applied directly to GPT-2 activations, I observed:
+The verbalizer quickly learned to generate realistic encyclopedia-style prose.
 
-* Baseline MSE ≈ 0.001
-* Extremely unstable FVE values
-* FVE often below −2000
+Yet qualitative inspection showed weak alignment with source content.
 
-Using unnormalized activations produced stable measurements:
+This suggests that producing fluent language is easier than producing informative explanations.
 
-* Mean activation norm ≈ 110
-* Baseline MSE ≈ 9.7
+Limitations
 
-I did not investigate whether this effect persists for larger models.
+The largest limitations are:
 
----
+MLP reconstructor instead of a language-model reconstructor.
+GPT-2 scale (124M) versus Claude-scale models.
+Small training budget (~2200 optimization steps).
+Proxy summaries rather than high-quality explanation supervision.
 
-# Why Results Differ From The Paper
+These factors likely explain most of the gap between 0.0455 FVE and the paper's reported 0.6–0.8.
 
-Several factors likely explain the gap between 0.0455 FVE and Anthropic's reported 0.6–0.8.
-
-### Reconstructor Capacity
-
-The paper uses a full language model as the reconstructor.
-
-This implementation uses a relatively small MLP.
-
-This is likely the largest contributor to the performance gap.
-
-### Model Scale
-
-GPT-2 (124M) is far smaller than Claude-scale systems.
-
-Larger models may contain more verbalizable internal representations.
-
-### Training Budget
-
-The paper trains for substantially longer.
-
-My experiments used roughly 2000 optimization steps.
-
-### Weak Supervision
-
-The paper benefits from stronger explanation-generation procedures.
-
-I relied on proxy summaries generated from the training corpus.
-
----
-
-# Limitations and Open Questions
-
-Several questions remain open:
-
-* Is reconstructor capacity the dominant bottleneck?
-* Would a full language-model reconstructor significantly improve FVE?
-* Are proxy summaries sufficient for small-scale NLA training?
-* Does the paraphrasing result reflect semantic understanding or broader distributional similarity?
-
-These would be natural directions for future work.
-
----
-
-# Reproducibility
+Reproducibility
 
 All experiments were run on:
 
-| Resource     | Value        |
-| ------------ | ------------ |
-| Platform     | Kaggle       |
-| GPU          | Tesla T4     |
-| VRAM         | 15.6 GB      |
-| Dataset      | WikiText-103 |
-| Model        | GPT-2 124M   |
-| Target Layer | 8            |
-| Runtime      | ~4 hours     |
+Kaggle T4 GPU
+15.6 GB VRAM
+No API keys required
 
 Repository structure:
 
-```text
 src/
 ├── config.py
 ├── data.py
@@ -327,39 +284,39 @@ src/
 ├── train.py
 └── evaluate.py
 
-data/
-├── qualitative_results.json
-
 figures/
-├── fve_curve.png
+└── fve_curve.png
 
-README.md
-requirements.txt
-```
+data/
+└── qualitative_results.json
 
 To reproduce:
 
-```bash
 git clone https://github.com/Elakkiya3/nla-gpt2
 cd nla-gpt2
 
 pip install -r requirements.txt
 
-# Run the Kaggle notebook or execute the pipeline
-# using the source files in src/
-```
+python src/data.py
+python src/train.py
+python src/evaluate.py
+Conclusion
 
-Final reported metrics:
+This project successfully reproduces the core Natural Language Autoencoder framework on a small open-source language model.
 
-* FVE = 0.0455
-* Steganography ratio = 0.997
+Although reconstruction performance remains far below the Claude-scale results reported by Anthropic, the experiments revealed several useful findings:
 
----
+Reconstructor pretraining is critical.
+Activation normalization can destabilize FVE at small scale.
+Fluent explanations are easier to learn than informative explanations.
+Reward-weighted optimization partially recovers reconstruction quality after joint training.
 
-# Reference
+The main takeaway is that the methodology remains viable at GPT-2 scale, but reconstruction capacity appears to be the primary bottleneck preventing stronger performance.
 
-Fraser-Taliente, Kantamneni, Ong et al. (2026).
+Reference
 
-Natural Language Autoencoders Produce Unsupervised Explanations of LLM Activations.
+Fraser-Taliente, Kantamneni, Ong et al. (2026)
+
+Natural Language Autoencoders Produce Unsupervised Explanations of LLM Activations
 
 https://transformer-circuits.pub/2026/nla/index.html
