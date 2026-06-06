@@ -1,4 +1,5 @@
 Natural Language Autoencoder on GPT-2
+
 Overview
 
 This project reimplements the core ideas from Anthropic's 2026 paper:
