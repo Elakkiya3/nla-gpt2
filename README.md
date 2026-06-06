@@ -147,16 +147,23 @@ This is not a full implementation of GRPO, but follows the same intuition of opt
 
 ### Fraction of Variance Explained (FVE)
 
-| Stage                    | FVE       |
-|--------------------------|-----------|
-| Phase B peak             | ~0.09     |
-| Phase C                  | 0.014     |
-| Best reward-weighted run | 0.0455    |
-| Anthropic paper          | 0.60–0.80 |
+| Stage                           | FVE       |
+|---------------------------------|-----------|
+| Phase B peak                    | ~0.09     |
+| Phase C                         | 0.014     |
+| Initial run                     | 0.0455    |
+| Independent reproducibility run | 0.0913    |
+| Anthropic paper                 | 0.60–0.80 |
 
-The final system achieved:
+The initial experiment achieved FVE = 0.0455.
 
-FVE = 0.0455
+To verify reproducibility, I reran the complete pipeline from scratch
+on a separate Kaggle environment. The second run achieved
+FVE = 0.0913.
+
+The variation between runs reflects the instability of small-scale
+joint optimization and reinforcement-style training, which was one of
+the recurring observations throughout this project.
 
 This is substantially below the paper's results but demonstrates a functioning natural-language bottleneck on a small model.
 
@@ -254,6 +261,25 @@ Kaggle T4 GPU
 15.6 GB VRAM
 No API keys required
 
+### Public Reproducibility Notebook
+
+A complete independent rerun of the pipeline is available on Kaggle:
+
+https://www.kaggle.com/code/elakkiya3/nla-gpt2-reproducibility-run-best-fve-0-0913
+
+This notebook reproduces:
+
+- Data preparation
+- Activation extraction
+- Phase A training
+- Phase B training
+- Joint SFT
+- Reward-weighted optimization
+- FVE evaluation
+- Figure generation
+
+The run achieved Best FVE = 0.0913.
+
 **Repository structure:**
 
 src/
@@ -277,9 +303,25 @@ cd nla-gpt2
 
 pip install -r requirements.txt
 
-python src/data.py
-python src/train.py
-python src/evaluate.py
+The complete experiment was executed through a Kaggle notebook on a
+T4 GPU.
+
+Open the public notebook and run all cells in order:
+
+https://www.kaggle.com/code/elakkiya3/nla-gpt2-reproducibility-run-best-fve-0-0913
+
+This notebook reproduces:
+
+- Data preparation
+- Activation extraction
+- Phase A training
+- Phase B training
+- Joint SFT
+- Reward-weighted optimization
+- FVE evaluation
+- Figure generation
+
+The run achieved Best FVE = 0.0913.
 
 **Conclusion**
 
@@ -292,7 +334,13 @@ Activation normalization can destabilize FVE at small scale.
 Fluent explanations are easier to learn than informative explanations.
 Reward-weighted optimization partially recovers reconstruction quality after joint training.
 
-The main takeaway is that the methodology remains viable at GPT-2 scale, but reconstruction capacity appears to be the primary bottleneck preventing stronger performance.
+The main takeaway is that the Natural Language Autoencoder methodology
+remains viable at GPT-2 scale, but reconstruction capacity and training
+stability appear to be the dominant bottlenecks.
+
+Across independent runs, the system achieved FVE values between
+0.0455 and 0.0913, suggesting that meaningful information can survive
+the natural-language bottleneck even under severe compute constraints.
 
 **Reference**
 
