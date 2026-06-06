@@ -149,8 +149,6 @@ This is not a full implementation of GRPO, but follows the same intuition of opt
 
 | Stage                           | FVE       |
 |---------------------------------|-----------|
-| Phase B peak                    | ~0.09     |
-| Phase C                         | 0.014     |
 | Initial run                     | 0.0455    |
 | Independent reproducibility run | 0.0913    |
 | Anthropic paper                 | 0.60–0.80 |
