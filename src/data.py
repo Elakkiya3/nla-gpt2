@@ -110,3 +110,10 @@ def load_data():
     summaries   = torch.load(SUMMARIES_PATH)
     texts       = torch.load(TEXTS_PATH)
     return activations, summaries, texts
+
+if __name__ == '__main__':
+    texts = load_texts()
+    activations = extract_activations(texts)
+    summaries = generate_summaries(texts)
+    save_data(activations, summaries, texts)
+    print('Data pipeline complete.')

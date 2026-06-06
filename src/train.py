@@ -249,3 +249,7 @@ def rl_training(av, ar, activations, fve_sft):
     torch.save(fve_history, FVE_HISTORY_PATH)
     print(f"\nRL done. Best FVE = {best_fve:.4f}")
     return av, ar, fve_history, best_fve
+
+if __name__ == '__main__':
+    print('Run via notebook: notebooks/nla_gpt2.ipynb')
+    print('See src/train.py for phase_a, phase_b, phase_c, rl_training functions.')

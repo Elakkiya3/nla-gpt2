@@ -160,3 +160,7 @@ def steganography_check(av, ar, activations, n_samples=50):
         "paraphrase_mse": round(para_mean, 4),
         "ratio":          round(ratio, 3)
     }
+
+if __name__ == '__main__':
+    print('Run via notebook: notebooks/nla_gpt2.ipynb')
+    print('See src/evaluate.py for compute_fve, qualitative_evaluation functions.')
